@@ -4,6 +4,7 @@ import asyncio
 from flask import Flask, request
 from telegram import Update
 from telegram.ext import (
+    Application,
     ApplicationBuilder,
     CommandHandler,
     MessageHandler,
@@ -59,7 +60,8 @@ async def cancel(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text("❌ Cancelled.")
     return ConversationHandler.END
 
-# ========== Flask + Telegram Integration ==========
+
+# ========== Setup Telegram + Flask ==========
 flask_app = Flask(__name__)
 
 application = ApplicationBuilder().token(TOKEN).build()
@@ -74,28 +76,38 @@ conv_handler = ConversationHandler(
 )
 application.add_handler(conv_handler)
 
+
 @flask_app.route("/", methods=["GET"])
 def home():
     return "🤖 Digital Marketing Bot is live!", 200
 
+
 @flask_app.route(f"/{TOKEN}", methods=["POST"])
-async def webhook():
-    try:
-        update = Update.de_json(request.get_json(force=True), application.bot)
-        await application.initialize()     # ✅ Initialize properly
-        await application.process_update(update)
-    except Exception as e:
-        print(f"❌ Error: {e}")
+def webhook():
+    json_update = request.get_json(force=True)
+    update = Update.de_json(json_update, application.bot)
+    asyncio.run(handle_update(update))   # ✅ run inside proper async context
     return "ok", 200
+
+
+async def handle_update(update: Update):
+    if not application.running:
+        await application.initialize()   # ensure it’s initialized
+        await application.start()        # ensure background workers are ready
+    await application.process_update(update)
+
 
 async def set_webhook():
     url = f"{RENDER_URL}/{TOKEN}"
     await application.bot.set_webhook(url)
-    print(f"✅ Webhook set to: {url}")
+    print(f"✅ Webhook set to {url}")
+
 
 if __name__ == "__main__":
     import threading
+
     def run_flask():
         flask_app.run(host="0.0.0.0", port=int(os.environ.get("PORT", 8080)))
+
     threading.Thread(target=run_flask).start()
     asyncio.run(set_webhook())
