@@ -1,16 +1,19 @@
 import os
 import json
+import smtplib
 import asyncio
 import threading
+import requests
 from flask import Flask, request
+from email.message import EmailMessage
 from telegram import Update
 from telegram.ext import (
     ApplicationBuilder,
     CommandHandler,
     MessageHandler,
-    ConversationHandler,
-    ContextTypes,
     filters,
+    ContextTypes,
+    ConversationHandler,
 )
 from dotenv import load_dotenv
 
@@ -18,13 +21,15 @@ from dotenv import load_dotenv
 load_dotenv()
 TOKEN = os.getenv("TELEGRAM_TOKEN")
 ADMIN_CHAT_ID = os.getenv("ADMIN_CHAT_ID")
+GOOGLE_SHEET_URL = os.getenv("GOOGLE_SHEET_WEBAPP_URL")
+SMTP_EMAIL = os.getenv("SMTP_EMAIL")
+SMTP_PASSWORD = os.getenv("SMTP_PASSWORD")
 RENDER_URL = os.getenv("RENDER_EXTERNAL_URL", "https://digitalmarketingbiz-bot.onrender.com")
 
-# === Telegram bot constants ===
 ASK_NAME, ASK_EMAIL = range(2)
 DATA_FILE = "leads.json"
 
-# === Helper Functions ===
+# === Helper functions ===
 def save_data(data):
     with open(DATA_FILE, "w") as f:
         json.dump(data, f, indent=2, ensure_ascii=False)
@@ -38,7 +43,38 @@ def load_data():
     except:
         return []
 
-# === Telegram bot handlers ===
+def post_to_sheet(payload: dict):
+    if not GOOGLE_SHEET_URL:
+        print("⚠️ GOOGLE_SHEET_WEBAPP_URL not set.")
+        return
+    try:
+        print(f"📤 Sending data to Google Sheet: {payload}")
+        resp = requests.post(GOOGLE_SHEET_URL, json=payload, timeout=20)
+        print(f"📊 Sheet response: {resp.status_code} {resp.text[:200]}")
+    except Exception as e:
+        print(f"❌ Google Sheet error: {e}")
+
+def send_email(name, recipient_email):
+    msg = EmailMessage()
+    msg["Subject"] = "Welcome to Digital Marketing Business 🚀"
+    msg["From"] = f"Digital Marketing Business <{SMTP_EMAIL}>"
+    msg["To"] = recipient_email
+    msg.set_content(
+        f"Hello {name},\n\n"
+        "Welcome to Digital Marketing Business! 🎉\n"
+        "Here’s your first step into learning online marketing and building your business.\n\n"
+        "Visit our website or check your Telegram messages for more info.\n\n"
+        "— The Digital Marketing Team"
+    )
+    try:
+        with smtplib.SMTP_SSL("smtp.gmail.com", 465) as smtp:
+            smtp.login(SMTP_EMAIL, SMTP_PASSWORD)
+            smtp.send_message(msg)
+        print(f"✅ Email sent to {recipient_email}")
+    except Exception as e:
+        print(f"❌ Email error: {e}")
+
+# === Telegram logic ===
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text("👋 Welcome! Please enter your full name:")
     return ASK_NAME
@@ -52,8 +88,17 @@ async def ask_email(update: Update, context: ContextTypes.DEFAULT_TYPE):
     email_input = update.message.text.strip()
     name = context.user_data.get("name", "User")
     leads = load_data()
-    leads.append({"name": name, "email": email_input})
+    record = {
+        "name": name,
+        "email": email_input,
+        "username": update.effective_user.username,
+        "user_id": update.effective_user.id,
+        "status": "New"
+    }
+    leads.append(record)
     save_data(leads)
+    post_to_sheet(record)
+    send_email(name, email_input)
     await update.message.reply_text(f"✅ Thanks {name}! We'll contact you at {email_input}.")
     return ConversationHandler.END
 
@@ -61,10 +106,8 @@ async def cancel(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text("❌ Cancelled.")
     return ConversationHandler.END
 
-# === Flask setup ===
+# === Flask + Telegram setup ===
 flask_app = Flask(__name__)
-
-# === Telegram app setup ===
 application = ApplicationBuilder().token(TOKEN).build()
 
 conv_handler = ConversationHandler(
@@ -77,13 +120,12 @@ conv_handler = ConversationHandler(
 )
 application.add_handler(conv_handler)
 
-# === Shared event loop for both Flask & Telegram ===
 loop = asyncio.new_event_loop()
 asyncio.set_event_loop(loop)
 
 @flask_app.route("/", methods=["GET"])
 def home():
-    return "🤖 Digital Marketing Bot is running!", 200
+    return "🤖 Digital Marketing Bot is live!", 200
 
 @flask_app.route(f"/{TOKEN}", methods=["POST"])
 def webhook():
@@ -103,7 +145,6 @@ async def set_webhook():
     await application.bot.set_webhook(url)
     print(f"✅ Webhook set to {url}")
 
-# === Run everything ===
 def run_bot():
     loop.run_until_complete(set_webhook())
     loop.run_forever()
