@@ -135,6 +135,10 @@ async def cancel(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text("❌ لغو شد.", reply_markup=MAIN_MENU)
     return ConversationHandler.END
 
+# === Ping ===
+async def ping(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    await update.message.reply_text("✅ Bot is alive and connected.")
+
 # ========== APP ==========
 application = Application.builder().token(TELEGRAM_TOKEN).build()
 
@@ -149,6 +153,7 @@ conv_handler = ConversationHandler(
 
 application.add_handler(conv_handler)
 application.add_handler(CommandHandler("start", show_menu))
+application.add_handler(CommandHandler("ping", ping))
 application.add_handler(MessageHandler(filters.Regex("^(🏁 شروع)$"), show_menu))
 application.add_handler(MessageHandler(filters.Regex("^(📘 درباره ما)$"), about))
 application.add_handler(MessageHandler(filters.Regex("^(📅 رزرو جلسه)$"), appointment))
@@ -163,8 +168,9 @@ def webhook():
     try:
         data = request.get_json(force=True)
         update = Update.de_json(data, application.bot)
-        # ✅ Thread-safe async call (prevents "Task destroyed" warnings)
-        asyncio.run_coroutine_threadsafe(application.process_update(update), loop)
+        # ✅ Proper async handling (no pending-task warnings)
+        loop.run_until_complete(application.process_update(update))
+        print("✅ Processed update successfully.")
     except Exception as e:
         print("❌ Webhook error:", e)
     return "ok"
