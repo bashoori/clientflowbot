@@ -6,8 +6,7 @@ services:
     plan: starter
 
     buildCommand: pip install -r requirements.txt
-
-    # 🚫 no startCommand here — Render will read your Procfile instead
+    startCommand: gunicorn app:flask_app
 
     envVars:
       - key: TELEGRAM_TOKEN
