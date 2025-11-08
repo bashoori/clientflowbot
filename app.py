@@ -2,7 +2,7 @@ import os
 import re
 import json
 import asyncio
-from datetime import datetime
+from datetime import datetime, UTC
 from flask import Flask, request
 from telegram import Update, ReplyKeyboardRemove
 from telegram.ext import (
@@ -26,7 +26,7 @@ GOOGLE_SHEET_WEBAPP_URL = os.getenv("GOOGLE_SHEET_WEBAPP_URL")
 ROOT_URL = os.getenv("ROOT_URL", "https://digitalmarketingbiz-bot.onrender.com")
 
 # ==========================================================
-# 🗂 Local storage setup
+# 🗂 Local storage
 # ==========================================================
 LEADS_FILE = "leads.json"
 
@@ -44,10 +44,9 @@ def save_leads(leads):
         json.dump(leads, f, ensure_ascii=False, indent=2)
 
 # ==========================================================
-# 📧 Email validation & Google Sheet posting
+# 📧 Email validation + Google Sheet post
 # ==========================================================
 def is_valid_email(email_str: str) -> bool:
-    """Basic regex email validator"""
     pattern = r"^[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}$"
     return re.match(pattern, email_str) is not None
 
@@ -58,21 +57,18 @@ def post_to_sheet(payload: dict, timeout: int = 15) -> bool:
         return False
     try:
         resp = requests.post(GOOGLE_SHEET_WEBAPP_URL, json=payload, timeout=timeout)
-        print(f"📤 Sheet POST: {resp.status_code} - {resp.text[:120]}")
+        print(f"📤 Sheet POST: {resp.status_code} – {resp.text[:100]}")
         return resp.status_code == 200
     except Exception as e:
         print("❌ post_to_sheet error:", e)
         return False
 
 # ==========================================================
-# 🤖 Telegram Bot Setup
+# 🤖 Telegram Bot Logic
 # ==========================================================
 ASK_NAME, ASK_EMAIL = range(2)
 flask_app = Flask(__name__)
 
-# ------------------------
-# Handlers
-# ------------------------
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text("👋 سلام! لطفاً نام خود را وارد کنید:")
     return ASK_NAME
@@ -90,25 +86,20 @@ async def ask_email(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text("❌ ایمیل معتبر نیست. لطفاً دوباره وارد کنید:")
         return ASK_EMAIL
 
-    # Save lead info
     lead = {
         "name": name,
         "email": email_input,
         "user_id": update.effective_user.id if update.effective_user else None,
         "username": update.effective_user.username if update.effective_user else None,
         "status": "Validated",
-        "created_at": datetime.utcnow().isoformat() + "Z",
+        "created_at": datetime.now(UTC).isoformat(),
     }
 
     leads = load_leads()
     leads.append(lead)
-    try:
-        save_leads(leads)
-        print(f"💾 Saved locally: {lead}")
-    except Exception as e:
-        print("⚠️ Failed to save lead:", e)
+    save_leads(leads)
+    print(f"💾 Saved locally: {lead}")
 
-    # Post to Google Sheet
     posted = post_to_sheet({
         "name": lead["name"],
         "email": lead["email"],
@@ -118,15 +109,10 @@ async def ask_email(update: Update, context: ContextTypes.DEFAULT_TYPE):
     })
 
     if posted:
-        await update.message.reply_text(
-            f"✅ ایمیل شما ({email_input}) معتبر است و ثبت شد.\n"
-            "ممنون! ممکن است بعداً با شما تماس بگیریم."
-        )
+        msg = f"✅ ایمیل شما ({email_input}) معتبر است و ثبت شد."
     else:
-        await update.message.reply_text(
-            f"✅ ایمیل شما ({email_input}) معتبر است و در سیستم محلی ذخیره شد.\n"
-            "اما ارسال به Google Sheet موفق نبود."
-        )
+        msg = f"✅ ایمیل شما ({email_input}) معتبر است و در سیستم محلی ذخیره شد (مشکل در ارسال به Sheet)."
+    await update.message.reply_text(msg)
 
     return ConversationHandler.END
 
@@ -155,13 +141,13 @@ application.add_handler(conv_handler)
 @flask_app.route(f"/{TOKEN}", methods=["POST"])
 def webhook():
     try:
-        if not application.ready:
+        if not getattr(application, "_initialized", False):
             asyncio.run(application.initialize())
+            application._initialized = True
 
         update_data = request.get_json(force=True)
         update = Update.de_json(update_data, application.bot)
         asyncio.run(application.process_update(update))
-
         return "ok", 200
     except Exception as e:
         print(f"❌ Webhook error: {e}")
@@ -169,10 +155,15 @@ def webhook():
 
 @flask_app.route("/")
 def index():
-    return f"✅ Bot running — {datetime.utcnow().strftime('%Y-%m-%d %H:%M:%S UTC')}"
+    return f"✅ Bot running — {datetime.now(UTC).strftime('%Y-%m-%d %H:%M:%S UTC')}"
+
+@flask_app.route("/healthz")
+def healthz():
+    """Simple health-check endpoint for Render ping or uptime monitoring."""
+    return "ok", 200
 
 # ==========================================================
-# 🚀 Startup & Webhook setup
+# 🚀 Startup & Webhook Setup
 # ==========================================================
 async def set_webhook():
     webhook_url = f"{ROOT_URL}/{TOKEN}"
@@ -183,7 +174,7 @@ async def set_webhook():
         print(f"⚠️ Webhook setup failed: {e}")
 
 if __name__ == "__main__":
-    print("🚀 Starting Email Validation + Sheet Bot (Render)...")
-    asyncio.run(application.initialize())  # Ensure bot is initialized once
-    asyncio.run(set_webhook())             # Register webhook
+    print("🚀 Starting Email Validation + Sheet Bot (Render)…")
+    asyncio.run(application.initialize())
+    asyncio.run(set_webhook())
     flask_app.run(host="0.0.0.0", port=PORT)
