@@ -6,7 +6,6 @@ services:
     plan: starter
 
     buildCommand: pip install -r requirements.txt
-    startCommand: gunicorn app:flask_app --timeout 120 --workers 1
 
     envVars:
       - key: TELEGRAM_TOKEN
