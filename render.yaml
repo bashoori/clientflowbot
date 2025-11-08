@@ -2,21 +2,13 @@ services:
   - type: web
     name: digitalmarketingbiz-bot
     env: python
-    region: oregon
     plan: free
-
     buildCommand: pip install -r requirements.txt
-    startCommand: gunicorn app:flask_app
-
+    startCommand: gunicorn app:flask_app --timeout 120 --preload
     envVars:
       - key: TELEGRAM_TOKEN
-        sync: false  # Add manually in Render Dashboard
+        sync: false
       - key: GOOGLE_SHEET_WEBAPP_URL
-        sync: false  # Add manually in Render Dashboard
+        sync: false
       - key: ROOT_URL
         value: https://digitalmarketingbiz-bot.onrender.com
-      - key: PORT
-        value: 10000
-
-    healthCheckPath: /
-    autoDeploy: true
