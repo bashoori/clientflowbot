@@ -1,28 +1,37 @@
 import os
 import re
 import asyncio
+from flask import Flask, request
 from telegram import Update, ReplyKeyboardRemove
 from telegram.ext import (
-    ApplicationBuilder, CommandHandler, MessageHandler,
-    filters, ContextTypes, ConversationHandler
+    Application,
+    CommandHandler,
+    MessageHandler,
+    ConversationHandler,
+    ContextTypes,
+    filters,
 )
-from authorize_gmail import send_welcome_email
 from dotenv import load_dotenv
+from authorize_gmail import send_welcome_email  # ✅ Make sure this file exists
 
-# ========== Load environment variables ==========
+# ======== Load environment variables ========
 load_dotenv()
 TOKEN = os.getenv("TELEGRAM_TOKEN")
+PORT = int(os.environ.get("PORT", 10000))
 
-# ========== States ==========
+# ======== Telegram conversation states ========
 ASK_NAME, ASK_EMAIL = range(2)
 
-# ========== Helper functions ==========
+# ======== Helper function: Email validation ========
 def is_valid_email(email_str: str) -> bool:
-    """Check if email matches a valid pattern."""
+    """Simple regex check for valid email"""
     pattern = r"^[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}$"
     return re.match(pattern, email_str) is not None
 
-# ========== Handlers ==========
+# ======== Flask app (for Render hosting) ========
+flask_app = Flask(__name__)
+
+# ======== Telegram Bot Handlers ========
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text("👋 سلام! لطفاً نام خود را وارد کنید:")
     return ASK_NAME
@@ -37,7 +46,7 @@ async def ask_email(update: Update, context: ContextTypes.DEFAULT_TYPE):
     email_input = update.message.text.strip()
     name = context.user_data.get("name")
 
-    # === validate email ===
+    # Validate email
     if not is_valid_email(email_input):
         await update.message.reply_text("❌ ایمیل معتبر نیست. لطفاً دوباره وارد کنید:")
         return ASK_EMAIL
@@ -49,7 +58,7 @@ async def ask_email(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     try:
         sent = send_welcome_email(name, email_input)
-        await asyncio.sleep(2)
+        await asyncio.sleep(1)
 
         if sent:
             await update.message.reply_text(
@@ -62,7 +71,7 @@ async def ask_email(update: Update, context: ContextTypes.DEFAULT_TYPE):
             )
 
     except Exception as e:
-        print(f"❌ Email sending error: {e}")
+        print("❌ Email sending error:", e)
         await update.message.reply_text(
             "⚠️ مشکلی در ارسال ایمیل پیش آمد. لطفاً بعداً امتحان کنید."
         )
@@ -73,24 +82,44 @@ async def cancel(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text("گفت‌وگو لغو شد.", reply_markup=ReplyKeyboardRemove())
     return ConversationHandler.END
 
-# ========== Main ==========
-def main():
-    """Start the Telegram bot."""
-    app = ApplicationBuilder().token(TOKEN).build()
+# ======== Telegram Application Setup ========
+application = Application.builder().token(TOKEN).build()
 
-    conv_handler = ConversationHandler(
-        entry_points=[CommandHandler("start", start)],
-        states={
-            ASK_NAME: [MessageHandler(filters.TEXT & ~filters.COMMAND, ask_name)],
-            ASK_EMAIL: [MessageHandler(filters.TEXT & ~filters.COMMAND, ask_email)],
-        },
-        fallbacks=[CommandHandler("cancel", cancel)],
-    )
+conv_handler = ConversationHandler(
+    entry_points=[CommandHandler("start", start)],
+    states={
+        ASK_NAME: [MessageHandler(filters.TEXT & ~filters.COMMAND, ask_name)],
+        ASK_EMAIL: [MessageHandler(filters.TEXT & ~filters.COMMAND, ask_email)],
+    },
+    fallbacks=[CommandHandler("cancel", cancel)],
+)
 
-    app.add_handler(conv_handler)
+application.add_handler(conv_handler)
 
-    print("🤖 Bot is running and waiting for messages...")
-    app.run_polling(allowed_updates=Update.ALL_TYPES)
+# ======== Flask route for Telegram webhook ========
+@flask_app.route(f"/{TOKEN}", methods=["POST"])
+async def webhook():
+    """Handle incoming Telegram updates via webhook"""
+    try:
+        update = Update.de_json(request.get_json(force=True), application.bot)
+        await application.process_update(update)
+    except Exception as e:
+        print("❌ Webhook error:", e)
+    return "ok"
 
+# ======== Health check route ========
+@flask_app.route("/")
+def index():
+    return "🤖 Digital Marketing Bot is alive!"
+
+# ======== Startup (webhook registration) ========
+async def set_webhook():
+    webhook_url = f"https://digitalmarketingbiz-bot.onrender.com/{TOKEN}"
+    await application.bot.set_webhook(webhook_url)
+    print(f"✅ Webhook set to: {webhook_url}")
+
+# ======== Entry point ========
 if __name__ == "__main__":
-    main()
+    print("🚀 Starting Digital Marketing Bot...")
+    asyncio.run(set_webhook())
+    flask_app.run(host="0.0.0.0", port=PORT)
