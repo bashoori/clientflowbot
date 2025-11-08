@@ -1,4 +1,3 @@
-# app.py
 import os
 import re
 import json
@@ -16,18 +15,14 @@ from telegram.ext import (
     filters,
 )
 
-# ==================== Config ====================
+# ========== ENV CONFIG ==========
 TELEGRAM_TOKEN = os.getenv("TELEGRAM_TOKEN")
 GOOGLE_SHEET_WEBAPP_URL = os.getenv("GOOGLE_SHEET_WEBAPP_URL")
 ROOT_URL = os.getenv("ROOT_URL", "https://digitalmarketingbiz-bot.onrender.com")
 PORT = int(os.getenv("PORT", "10000"))
 
-if not TELEGRAM_TOKEN:
-    raise RuntimeError("❌ Missing TELEGRAM_TOKEN environment variable")
-
-# ==================== Local backup file ====================
+# ========== STORAGE ==========
 LEADS_FILE = "leads.json"
-
 def load_leads():
     if not os.path.exists(LEADS_FILE):
         return []
@@ -41,73 +36,70 @@ def save_leads(leads):
     with open(LEADS_FILE, "w", encoding="utf-8") as f:
         json.dump(leads, f, ensure_ascii=False, indent=2)
 
-# ==================== Helpers ====================
+# ========== HELPERS ==========
 def normalize_email(raw: str) -> str:
     if not raw:
         return ""
     return raw.replace("\u200c", "").replace("\u200f", "").strip().lower()
 
 EMAIL_RE = re.compile(r"^[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}$")
-
-def is_valid_email(email_str: str) -> bool:
-    if not email_str:
-        return False
-    return EMAIL_RE.match(email_str.strip()) is not None
+def is_valid_email(email: str) -> bool:
+    return EMAIL_RE.match(email.strip()) if email else False
 
 def post_to_sheet(payload: dict, timeout: int = 10) -> bool:
     if not GOOGLE_SHEET_WEBAPP_URL:
         print("⚠️ GOOGLE_SHEET_WEBAPP_URL not set")
         return False
     try:
-        resp = requests.post(GOOGLE_SHEET_WEBAPP_URL, json=payload, timeout=timeout)
-        print(f"📤 POST Sheet → {resp.status_code}: {resp.text[:200]}")
-        return resp.status_code == 200
+        r = requests.post(GOOGLE_SHEET_WEBAPP_URL, json=payload, timeout=timeout)
+        print(f"📤 POST Sheet → {r.status_code}: {r.text[:200]}")
+        return r.status_code == 200
     except Exception as e:
         print("❌ post_to_sheet error:", e)
         return False
 
-# ==================== Telegram Conversation States ====================
+# ========== MENU ==========
+MAIN_MENU = ReplyKeyboardMarkup(
+    [["🏁 شروع", "📘 درباره ما"], ["📝 ثبت‌نام", "📅 رزرو جلسه"]],
+    resize_keyboard=True,
+)
+
+# ========== STATES ==========
 ASK_NAME, ASK_EMAIL = range(2)
 
-# ==================== Telegram Handlers ====================
-async def cmd_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    intro = (
-        "👋 سلام! خوش آمدید به *Digital Marketing Business Bot*.\n\n"
-        "ما در اینجا به شما آموزش می‌دهیم چگونه کسب‌وکار دیجیتال خود را راه‌اندازی کنید "
-        "و با ابزارهای مارکتینگ آنلاین رشد کنید.\n\n"
-        "برای ادامه یکی از گزینه‌های زیر را انتخاب کنید 👇"
+# ========== TELEGRAM HANDLERS ==========
+async def show_menu(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    await update.message.reply_text(
+        "👋 سلام! به ربات دیجیتال مارکتینگ خوش آمدید.\n\n"
+        "از منوی زیر انتخاب کنید:",
+        reply_markup=MAIN_MENU,
     )
-    keyboard = ReplyKeyboardMarkup(
-        [["📘 درباره ما", "📝 ثبت نام"]],
-        resize_keyboard=True,
-        one_time_keyboard=True,
-    )
-    await update.message.reply_text(intro, reply_markup=keyboard, parse_mode="Markdown")
 
 async def about(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    text = (
-        "🌐 *درباره ما:*\n\n"
-        "ما آموزش دیجیتال مارکتینگ و راه‌اندازی بیزنس آنلاین را ساده و قابل‌فهم کرده‌ایم. "
-        "با ما یاد می‌گیرید چگونه مشتری جذب کنید، محتوای حرفه‌ای بسازید و از ابزارهای اتوماسیون استفاده کنید."
+    await update.message.reply_text(
+        "📘 *درباره ما:*\n"
+        "ما آموزش و راه‌اندازی بیزنس آنلاین، اتوماسیون و دیژیتال مارکتینگ را "
+        "برای همه ساده کرده‌ایم. با ما یاد بگیرید چطور برند خودتان را بسازید و درآمد آنلاین کسب کنید.",
+        parse_mode="Markdown",
+        reply_markup=MAIN_MENU,
     )
-    await update.message.reply_text(text, parse_mode="Markdown")
 
+# === Registration ===
 async def start_registration(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    await update.message.reply_text("عالی 🌟 لطفاً نام کامل خود را وارد کنید:", reply_markup=ReplyKeyboardRemove())
+    await update.message.reply_text("📝 لطفاً نام کامل خود را وارد کنید:", reply_markup=ReplyKeyboardRemove())
     return ASK_NAME
 
 async def ask_name(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    name = update.message.text.strip()
-    context.user_data["name"] = name
-    await update.message.reply_text("خیلی خوب ✅ حالا لطفاً ایمیل خود را وارد کنید (مثلاً example@gmail.com):")
+    context.user_data["name"] = update.message.text.strip()
+    await update.message.reply_text("خوب 🌟 حالا لطفاً ایمیل خود را وارد کنید:")
     return ASK_EMAIL
 
 async def ask_email(update: Update, context: ContextTypes.DEFAULT_TYPE):
     email = normalize_email(update.message.text)
-    name = context.user_data.get("name", "").strip()
+    name = context.user_data.get("name", "")
 
     if not is_valid_email(email):
-        await update.message.reply_text("❌ ایمیل معتبر نیست. لطفاً دوباره وارد کنید:")
+        await update.message.reply_text("❌ ایمیل معتبر نیست. دوباره وارد کنید:")
         return ASK_EMAIL
 
     lead = {
@@ -122,35 +114,32 @@ async def ask_email(update: Update, context: ContextTypes.DEFAULT_TYPE):
     leads = load_leads()
     leads.append(lead)
     save_leads(leads)
-    print("💾 Saved locally:", lead)
 
-    posted = post_to_sheet({
-        "name": lead["name"],
-        "email": lead["email"],
-        "username": lead["username"] or "",
-        "user_id": lead["user_id"] or "",
-        "status": lead["status"],
-    })
+    posted = post_to_sheet(lead)
+    text = f"✅ {name}، ثبت‌نام شما انجام شد!" if posted else "✅ ثبت‌نام انجام شد (ذخیره محلی موفق)."
 
-    if posted:
-        msg = f"✅ ایمیل شما ({email}) معتبر است و ثبت شد. ممنون از شما!"
-    else:
-        msg = f"✅ ایمیل شما ({email}) معتبر است، ولی ارسال به Google Sheet انجام نشد."
-
-    await update.message.reply_text(msg)
+    await update.message.reply_text(text, reply_markup=MAIN_MENU)
     return ConversationHandler.END
 
+# === Appointment ===
+async def appointment(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    await update.message.reply_text(
+        "📅 برای رزرو جلسه لطفاً وارد این لینک شوید:\n\n"
+        "https://calendly.com/your-link\n\n"
+        "یا از منوی زیر گزینه دیگری انتخاب کنید.",
+        reply_markup=MAIN_MENU,
+    )
+
+# === Cancel ===
 async def cancel(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    await update.message.reply_text("گفت‌وگو لغو شد.", reply_markup=ReplyKeyboardRemove())
+    await update.message.reply_text("❌ لغو شد.", reply_markup=MAIN_MENU)
     return ConversationHandler.END
 
-# ==================== Telegram App ====================
+# ========== APP ==========
 application = Application.builder().token(TELEGRAM_TOKEN).build()
 
 conv_handler = ConversationHandler(
-    entry_points=[
-        MessageHandler(filters.Regex(r"^(📝 ثبت نام|ثبت نام)$"), start_registration)
-    ],
+    entry_points=[MessageHandler(filters.Regex("^(📝 ثبت‌نام|ثبت نام)$"), start_registration)],
     states={
         ASK_NAME: [MessageHandler(filters.TEXT & ~filters.COMMAND, ask_name)],
         ASK_EMAIL: [MessageHandler(filters.TEXT & ~filters.COMMAND, ask_email)],
@@ -159,14 +148,13 @@ conv_handler = ConversationHandler(
 )
 
 application.add_handler(conv_handler)
-application.add_handler(CommandHandler("start", cmd_start))
-application.add_handler(MessageHandler(filters.Regex(r"^(📘 درباره ما|درباره ما)$"), about))
-application.add_handler(CommandHandler("cancel", cancel))
+application.add_handler(CommandHandler("start", show_menu))
+application.add_handler(MessageHandler(filters.Regex("^(🏁 شروع)$"), show_menu))
+application.add_handler(MessageHandler(filters.Regex("^(📘 درباره ما)$"), about))
+application.add_handler(MessageHandler(filters.Regex("^(📅 رزرو جلسه)$"), appointment))
 
-# ==================== Flask + Webhook ====================
+# ========== FLASK & WEBHOOK ==========
 flask_app = Flask(__name__)
-
-# persistent loop
 loop = asyncio.new_event_loop()
 asyncio.set_event_loop(loop)
 
@@ -184,19 +172,17 @@ def webhook():
 def index():
     return f"✅ Bot running — {datetime.utcnow().strftime('%Y-%m-%d %H:%M:%S UTC')}"
 
-# ==================== Webhook setup ====================
 def set_webhook():
-    webhook_url = f"{ROOT_URL.rstrip('/')}/{TELEGRAM_TOKEN}"
     try:
         loop.run_until_complete(application.initialize())
+        webhook_url = f"{ROOT_URL.rstrip('/')}/{TELEGRAM_TOKEN}"
         loop.run_until_complete(application.bot.set_webhook(webhook_url))
-        print(f"✅ Webhook set to: {webhook_url}")
+        print(f"✅ Webhook set to {webhook_url}")
     except Exception as e:
         print("⚠️ Webhook setup failed:", e)
 
 set_webhook()
 
-# ==================== Entry ====================
 if __name__ == "__main__":
-    print("🚀 Starting Digital Marketing Bot...")
+    print("🚀 Starting Digital Marketing Bot with menu...")
     flask_app.run(host="0.0.0.0", port=PORT)
