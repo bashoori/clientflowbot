@@ -12,26 +12,25 @@ from telegram.ext import (
     filters,
 )
 from dotenv import load_dotenv
-from authorize_gmail import send_welcome_email  # ✅ Make sure this file exists
+from authorize_gmail import send_welcome_email  # ✅ Ensure this file exists
 
-# ======== Load environment variables ========
+# ========== Load environment variables ==========
 load_dotenv()
 TOKEN = os.getenv("TELEGRAM_TOKEN")
 PORT = int(os.environ.get("PORT", 10000))
 
-# ======== Telegram conversation states ========
+# ========== Telegram conversation states ==========
 ASK_NAME, ASK_EMAIL = range(2)
 
-# ======== Helper function: Email validation ========
+# ========== Helper: validate email ==========
 def is_valid_email(email_str: str) -> bool:
-    """Simple regex check for valid email"""
     pattern = r"^[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}$"
     return re.match(pattern, email_str) is not None
 
-# ======== Flask app (for Render hosting) ========
+# ========== Flask app (for Render hosting) ==========
 flask_app = Flask(__name__)
 
-# ======== Telegram Bot Handlers ========
+# ========== Telegram Bot Logic ==========
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text("👋 سلام! لطفاً نام خود را وارد کنید:")
     return ASK_NAME
@@ -46,7 +45,6 @@ async def ask_email(update: Update, context: ContextTypes.DEFAULT_TYPE):
     email_input = update.message.text.strip()
     name = context.user_data.get("name")
 
-    # Validate email
     if not is_valid_email(email_input):
         await update.message.reply_text("❌ ایمیل معتبر نیست. لطفاً دوباره وارد کنید:")
         return ASK_EMAIL
@@ -69,7 +67,6 @@ async def ask_email(update: Update, context: ContextTypes.DEFAULT_TYPE):
             await update.message.reply_text(
                 "⚠️ مشکلی در ارسال ایمیل پیش آمد. لطفاً بعداً امتحان کنید."
             )
-
     except Exception as e:
         print("❌ Email sending error:", e)
         await update.message.reply_text(
@@ -82,7 +79,7 @@ async def cancel(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text("گفت‌وگو لغو شد.", reply_markup=ReplyKeyboardRemove())
     return ConversationHandler.END
 
-# ======== Telegram Application Setup ========
+# ========== Build Telegram Application ==========
 application = Application.builder().token(TOKEN).build()
 
 conv_handler = ConversationHandler(
@@ -96,7 +93,7 @@ conv_handler = ConversationHandler(
 
 application.add_handler(conv_handler)
 
-# ======== Flask route for Telegram webhook ========
+# ========== Flask Routes ==========
 @flask_app.route(f"/{TOKEN}", methods=["POST"])
 async def webhook():
     """Handle incoming Telegram updates via webhook"""
@@ -107,19 +104,18 @@ async def webhook():
         print("❌ Webhook error:", e)
     return "ok"
 
-# ======== Health check route ========
 @flask_app.route("/")
 def index():
-    return "🤖 Digital Marketing Bot is alive!"
+    return "✅ Digital Marketing Bot is alive!"
 
-# ======== Startup (webhook registration) ========
+# ========== Webhook Setup ==========
 async def set_webhook():
     webhook_url = f"https://digitalmarketingbiz-bot.onrender.com/{TOKEN}"
     await application.bot.set_webhook(webhook_url)
     print(f"✅ Webhook set to: {webhook_url}")
 
-# ======== Entry point ========
+# ========== Entry Point ==========
 if __name__ == "__main__":
-    print("🚀 Starting Digital Marketing Bot...")
+    print("🚀 Starting Digital Marketing Bot (Webhook Mode)...")
     asyncio.run(set_webhook())
     flask_app.run(host="0.0.0.0", port=PORT)
