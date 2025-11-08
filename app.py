@@ -1,8 +1,8 @@
-# app.py
 import os
 import re
 import json
 import asyncio
+import requests
 from flask import Flask, request
 from telegram import Update, ReplyKeyboardRemove
 from telegram.ext import (
@@ -14,17 +14,19 @@ from telegram.ext import (
     filters,
 )
 from dotenv import load_dotenv
-import requests
 from datetime import datetime
+from threading import Lock
 
-# ========== Load env ==========
+# ========== Load environment variables ==========
 load_dotenv()
 TOKEN = os.getenv("TELEGRAM_TOKEN")
 PORT = int(os.environ.get("PORT", 10000))
-GOOGLE_SHEET_WEBAPP_URL = os.getenv("GOOGLE_SHEET_WEBAPP_URL")  # must be your Apps Script WebApp URL
+GOOGLE_SHEET_WEBAPP_URL = os.getenv("GOOGLE_SHEET_WEBAPP_URL")
+ROOT_URL = os.getenv("ROOT_URL", "https://digitalmarketingbiz-bot.onrender.com")
 
-# ========== Local storage ==========
+# ========== Local file setup ==========
 LEADS_FILE = "leads.json"
+lock = Lock()
 
 def load_leads():
     if not os.path.exists(LEADS_FILE):
@@ -36,25 +38,22 @@ def load_leads():
         return []
 
 def save_leads(leads):
-    with open(LEADS_FILE, "w", encoding="utf-8") as f:
-        json.dump(leads, f, ensure_ascii=False, indent=2)
+    """Thread-safe write to JSON file"""
+    with lock:
+        with open(LEADS_FILE, "w", encoding="utf-8") as f:
+            json.dump(leads, f, ensure_ascii=False, indent=2)
 
-# ========== Helpers ==========
+# ========== Helper functions ==========
 def is_valid_email(email_str: str) -> bool:
-    pattern = r"^[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}$"
-    return re.match(pattern, email_str) is not None
+    return re.match(r"^[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}$", email_str) is not None
 
 def post_to_sheet(payload: dict, timeout: int = 15) -> bool:
-    """
-    POST JSON to Google Apps Script Web App.
-    Return True on 200 OK + "Success" in response (best-effort).
-    """
     if not GOOGLE_SHEET_WEBAPP_URL:
         print("⚠️ GOOGLE_SHEET_WEBAPP_URL not set")
         return False
     try:
         resp = requests.post(GOOGLE_SHEET_WEBAPP_URL, json=payload, timeout=timeout)
-        print(f"📤 Sheet POST status: {resp.status_code} - {resp.text[:200]}")
+        print(f"📤 Sheet POST status: {resp.status_code} - {resp.text[:120]}")
         return resp.status_code == 200
     except Exception as e:
         print("❌ post_to_sheet error:", e)
@@ -63,10 +62,10 @@ def post_to_sheet(payload: dict, timeout: int = 15) -> bool:
 # ========== Telegram conversation states ==========
 ASK_NAME, ASK_EMAIL = range(2)
 
-# ========== Flask app (Render) ==========
+# ========== Flask app ==========
 flask_app = Flask(__name__)
 
-# ========== Telegram Handlers ==========
+# ========== Telegram handlers ==========
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text("👋 سلام! لطفاً نام خود را وارد کنید:")
     return ASK_NAME
@@ -74,7 +73,7 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
 async def ask_name(update: Update, context: ContextTypes.DEFAULT_TYPE):
     name = update.message.text.strip()
     context.user_data["name"] = name
-    await update.message.reply_text("خیلی خوب 🌟 حالا لطفاً ایمیل خود را وارد کنید:")
+    await update.message.reply_text("خیلی هم عالی 🌟 حالا لطفاً ایمیل خود را وارد کنید:")
     return ASK_EMAIL
 
 async def ask_email(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -85,7 +84,6 @@ async def ask_email(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text("❌ ایمیل معتبر نیست. لطفاً دوباره وارد کنید:")
         return ASK_EMAIL
 
-    # prepare lead record
     lead = {
         "name": name,
         "email": email_input,
@@ -95,16 +93,11 @@ async def ask_email(update: Update, context: ContextTypes.DEFAULT_TYPE):
         "created_at": datetime.utcnow().isoformat() + "Z"
     }
 
-    # save locally
     leads = load_leads()
     leads.append(lead)
-    try:
-        save_leads(leads)
-        print(f"💾 Saved locally: {lead}")
-    except Exception as e:
-        print("⚠️ Failed to save local lead:", e)
+    save_leads(leads)
+    print(f"💾 Lead saved locally: {lead}")
 
-    # post to Google Sheet (best-effort)
     posted = post_to_sheet({
         "name": lead["name"],
         "email": lead["email"],
@@ -121,7 +114,7 @@ async def ask_email(update: Update, context: ContextTypes.DEFAULT_TYPE):
     else:
         await update.message.reply_text(
             f"✅ ایمیل شما ({email_input}) معتبر است و در سیستم محلی ذخیره شد.\n"
-            "اما در ارسال به Google Sheet مشکلی پیش آمد. لطفاً بعداً بررسی خواهم کرد."
+            "اما در ارسال به Google Sheet مشکلی پیش آمد."
         )
 
     return ConversationHandler.END
@@ -130,7 +123,7 @@ async def cancel(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text("گفت‌وگو لغو شد.", reply_markup=ReplyKeyboardRemove())
     return ConversationHandler.END
 
-# ========== Build Telegram Application ==========
+# ========== Telegram app ==========
 application = Application.builder().token(TOKEN).build()
 
 conv_handler = ConversationHandler(
@@ -141,10 +134,9 @@ conv_handler = ConversationHandler(
     },
     fallbacks=[CommandHandler("cancel", cancel)],
 )
-
 application.add_handler(conv_handler)
 
-# ========== Flask webhook route ==========
+# ========== Webhook routes ==========
 @flask_app.route(f"/{TOKEN}", methods=["POST"])
 async def webhook():
     try:
@@ -156,18 +148,24 @@ async def webhook():
 
 @flask_app.route("/")
 def index():
-    return "✅ Email Validation + Sheet Bot is running"
+    return f"✅ Email Validation + Sheet Bot active at {datetime.utcnow().strftime('%Y-%m-%d %H:%M:%S UTC')}"
 
-# ========== Set webhook on startup ==========
-async def set_webhook():
-    # change this to your actual Render URL if different
-    root_url = os.getenv("ROOT_URL", "https://digitalmarketingbiz-bot.onrender.com")
-    webhook_url = f"{root_url}/{TOKEN}"
-    await application.bot.set_webhook(webhook_url)
-    print(f"✅ Webhook set to: {webhook_url}")
+# ========== Webhook setup ==========
+async def ensure_webhook():
+    current = await application.bot.get_webhook_info()
+    desired = f"{ROOT_URL}/{TOKEN}"
+    if current.url != desired:
+        await application.bot.set_webhook(desired)
+        print(f"✅ Webhook set to: {desired}")
+    else:
+        print(f"ℹ️ Webhook already set to: {desired}")
 
 # ========== Entry point ==========
 if __name__ == "__main__":
-    print("🚀 Starting Email Validation + Sheet Bot (webhook mode)...")
-    asyncio.run(set_webhook())
-    flask_app.run(host="0.0.0.0", port=PORT)
+    print("🚀 Starting Email Validation + Sheet Bot (Render)...")
+
+    async def main():
+        await ensure_webhook()
+        flask_app.run(host="0.0.0.0", port=PORT)
+
+    asyncio.run(main())
